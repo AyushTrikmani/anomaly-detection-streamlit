@@ -1,4 +1,0 @@
-tensorflow>=2.10,<2.13
-streamlit
-Pillow
-numpy
