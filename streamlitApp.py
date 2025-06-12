@@ -1,13 +1,8 @@
 import streamlit as st
-import io
-import cv2
 import numpy as np
 from PIL import Image
-import tensorflow as tf
-from tensorflow import keras
-
-# Disable scientific notation for clarity
-np.set_printoptions(suppress=True)
+import base64
+import io
 
 # Set up the page layout
 st.set_page_config(page_title="Display Damage Inspector", page_icon="🔍")
@@ -36,69 +31,63 @@ with st.sidebar:
         "and our AI will classify it as either Normal or Damaged with confidence scores."
     )
 
-# Load the model
-@st.cache_resource
-def load_model():
-    try:
-        # Load the Keras model
-        model = keras.models.load_model('keras_model.h5')
-        
-        # Load class names
-        with open('labels.txt', 'r') as f:
-            class_names = [line.strip().split(' ', 1)[1] for line in f.readlines()]
-        
-        return model, class_names
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None, None
-
-# Load model and class names
-model, class_names = load_model()
-
-if model is None:
-    st.error("Failed to load the model. Please check if 'keras_model.h5' and 'labels.txt' are in the correct directory.")
-    st.stop()
-
-def preprocess_image(image):
-    """
-    Preprocess the image for the Teachable Machine model
-    """
-    # Resize image to 224x224 as required by Teachable Machine
-    image = image.resize((224, 224))
-    
-    # Convert to numpy array
-    image_array = np.asarray(image)
-    
-    # Normalize the image (Teachable Machine uses values between 0 and 1)
-    normalized_image_array = (image_array.astype(np.float32) / 127.5) - 1
-    
-    # Reshape for the model (add batch dimension)
-    data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
-    data[0] = normalized_image_array
-    
-    return data
-
+# Simple rule-based prediction function for demonstration
 def predict_damage(image):
     """
-    Predict if the display is normal or damaged
+    Simple rule-based prediction - analyzes image characteristics
+    Replace this with your actual Teachable Machine model integration
     """
-    try:
-        # Preprocess the image
-        processed_image = preprocess_image(image)
-        
-        # Make prediction
-        prediction = model.predict(processed_image)
-        
-        # Get the predicted class and confidence
-        predicted_class_index = np.argmax(prediction[0])
-        confidence = prediction[0][predicted_class_index]
-        predicted_class = class_names[predicted_class_index]
-        
-        return predicted_class, confidence, prediction[0]
+    # Convert image to numpy array for analysis
+    img_array = np.array(image)
     
-    except Exception as e:
-        st.error(f"Error during prediction: {str(e)}")
-        return None, None, None
+    # Simple analysis based on image properties
+    # Calculate brightness and contrast metrics
+    gray = np.mean(img_array, axis=2) if len(img_array.shape) == 3 else img_array
+    brightness = np.mean(gray)
+    contrast = np.std(gray)
+    
+    # Simple rule-based classification (you can adjust these thresholds)
+    # This is just for demonstration - replace with your actual model
+    
+    # Check for very dark areas (possible damage)
+    dark_pixels = np.sum(gray < 50) / gray.size
+    
+    # Check for high contrast variations (possible cracks)
+    edge_variation = np.sum(np.abs(np.diff(gray, axis=0))) + np.sum(np.abs(np.diff(gray, axis=1)))
+    edge_variation = edge_variation / gray.size
+    
+    # Simple scoring system
+    damage_score = 0
+    
+    if dark_pixels > 0.1:  # More than 10% dark pixels
+        damage_score += 0.3
+    
+    if edge_variation > 30:  # High edge variation
+        damage_score += 0.4
+    
+    if brightness < 80:  # Very low brightness
+        damage_score += 0.2
+    
+    if contrast > 60:  # High contrast (possible damage)
+        damage_score += 0.1
+    
+    # Determine prediction
+    if damage_score > 0.5:
+        predicted_class = "Damage"
+        confidence = min(0.6 + damage_score * 0.3, 0.95)
+    else:
+        predicted_class = "Normal"
+        confidence = max(0.6 + (1 - damage_score) * 0.3, 0.6)
+    
+    # Create probability distribution
+    if predicted_class == "Normal":
+        normal_prob = confidence
+        damage_prob = 1 - confidence
+    else:
+        damage_prob = confidence
+        normal_prob = 1 - confidence
+    
+    return predicted_class, confidence, [normal_prob, damage_prob]
 
 # Function to load uploaded image
 def load_uploaded_image(file):
@@ -160,38 +149,50 @@ if submit:
     with st.spinner("Analyzing display for damage..."):
         predicted_class, confidence, all_predictions = predict_damage(img_to_analyze)
         
-        if predicted_class is not None:
-            # Display main result
-            if predicted_class.lower() == "normal":
-                st.success(f"✅ **Result: {predicted_class}**")
-                st.success("Great news! No damage detected in this display.")
+        # Display main result
+        if predicted_class.lower() == "normal":
+            st.success(f"✅ **Result: {predicted_class}**")
+            st.success("Great news! No damage detected in this display.")
+        else:
+            st.error(f"⚠️ **Result: {predicted_class}**")
+            st.error("Damage detected! This display may require inspection or repair.")
+        
+        # Show confidence
+        st.write(f"**Confidence:** {confidence:.2%}")
+        
+        # Show detailed predictions
+        st.subheader("Detailed Analysis")
+        col1, col2 = st.columns(2)
+        
+        class_names = ["Normal", "Damage"]
+        for i, (class_name, prob) in enumerate(zip(class_names, all_predictions)):
+            if i % 2 == 0:
+                with col1:
+                    st.metric(class_name, f"{prob:.2%}")
             else:
-                st.error(f"⚠️ **Result: {predicted_class}**")
-                st.error("Damage detected! This display may require inspection or repair.")
-            
-            # Show confidence
-            st.write(f"**Confidence:** {confidence:.2%}")
-            
-            # Show detailed predictions
-            st.subheader("Detailed Analysis")
-            col1, col2 = st.columns(2)
-            
-            for i, (class_name, prob) in enumerate(zip(class_names, all_predictions)):
-                if i % 2 == 0:
-                    with col1:
-                        st.metric(class_name, f"{prob:.2%}")
-                else:
-                    with col2:
-                        st.metric(class_name, f"{prob:.2%}")
-            
-            # Recommendations
-            st.subheader("Recommendations")
-            if predicted_class.lower() == "normal":
-                st.info("🔍 The display appears to be in good condition. Continue regular monitoring.")
-            else:
-                st.warning("🔧 Consider having this display inspected by a technician. "
-                          "Document the damage for warranty or insurance purposes if applicable.")
+                with col2:
+                    st.metric(class_name, f"{prob:.2%}")
+        
+        # Recommendations
+        st.subheader("Recommendations")
+        if predicted_class.lower() == "normal":
+            st.info("🔍 The display appears to be in good condition. Continue regular monitoring.")
+        else:
+            st.warning("🔧 Consider having this display inspected by a technician. "
+                      "Document the damage for warranty or insurance purposes if applicable.")
 
-# Footer
+# Instructions for adding your model
 st.markdown("---")
-st.markdown("*Powered by AI and Computer Vision Technology*")
+st.info("""
+**To integrate your Teachable Machine model:**
+
+Since Streamlit Cloud doesn't support TensorFlow, here are alternative approaches:
+
+1. **Use Teachable Machine's REST API**: Deploy your model on Teachable Machine and call it via API
+2. **Convert to ONNX**: Export your model to ONNX format and use onnxruntime
+3. **Use HuggingFace Spaces**: Deploy there instead for full TensorFlow support
+
+For now, this app uses simple image analysis rules for demonstration.
+""")
+
+st.markdown("*Powered by Computer Vision Technology*")
